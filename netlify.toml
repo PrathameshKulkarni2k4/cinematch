@@ -1,0 +1,4 @@
+# Netlify config — CineMatch is a static site, no build step needed.
+[build]
+  publish = "."
+  command = ""
