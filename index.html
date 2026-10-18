@@ -167,6 +167,17 @@
   .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.15);
     border-top-color:var(--accent);animation:sp .8s linear infinite;margin:36px auto}
   @keyframes sp{to{transform:rotate(360deg)}}
+  .modal .back.playing{height:auto;background-image:none!important}
+  .modal .back.playing::after{display:none}
+  .player{position:relative;width:100%;aspect-ratio:16/9;background:#000}
+  .player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .freebadge{position:absolute;top:8px;right:8px;background:linear-gradient(135deg,#35d07f,#12a05a);
+    color:#04140c;font-size:10.5px;font-weight:800;letter-spacing:.06em;padding:3px 7px;border-radius:7px}
+  .playbtn{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transition:.2s}
+  .card:hover .playbtn{opacity:1}
+  .playbtn span{width:48px;height:48px;border-radius:50%;background:rgba(10,10,15,.8);
+    border:1px solid rgba(255,255,255,.35);display:grid;place-items:center;font-size:17px;color:#fff}
+  .modal .t .btn.primary{margin-top:4px}
   @media(max-width:640px){
     .mhead{flex-direction:column;align-items:flex-start}
     .mhead .poster{flex:0 0 auto;width:120px}
@@ -190,6 +201,7 @@
       <a href="#trending">Trending</a>
       <a href="#top10">Top 10</a>
       <a href="#genres">Genres</a>
+      <a href="#free">Free to Watch</a>
     </nav>
     <div class="searchwrap">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -228,6 +240,7 @@
 
 <footer>
   <b>CineMatch</b> — a content-based movie recommender (cosine similarity over movie metadata).
+  Trailers play from YouTube and the <b>Free to Watch</b> shelf streams public-domain films from the Internet Archive.
   Recommendations are computed locally from a 4,806-title dataset. Movie artwork, ratings and
   streaming availability come from <b>TMDB</b> and <b>JustWatch</b>.
   <br/>This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming links point to
@@ -343,16 +356,20 @@ async function buildHome(){
     for(const gr of genreRows)
       html += rowSection('g'+gr.g.id, gr.g.name, '', gr.items);
     html += rowSection('fromlib','From the recommender library','Every title here is in the local 4,806-movie dataset', librarySamples());
+    html += '<div id="freeholder"></div>';
     rowsEl.innerHTML = html;
 
     HERO = (trend.results||[]).filter(m=>m.backdrop_path).slice(0,5);
     if(!HERO.length) HERO = (pop.results||[]).filter(m=>m.backdrop_path).slice(0,5);
     setupHero();
+    buildFreeRow();
   }catch(e){
     // offline / blocked fallback: still show something usable
     rowsEl.innerHTML = rowSection('fromlib','From the recommender library',
       'Live metadata unavailable — showing the local dataset', librarySamples())
+      + '<div id="freeholder"></div>'
       + `<div class="empty">Couldn't reach TMDB (${esc(e.message)}).<br/>The recommender still works — search a title above.</div>`;
+    buildFreeRow();
     const bg=document.getElementById('heroBg');
     document.getElementById('heroTitle').textContent="Search a movie to get recommendations";
     document.getElementById('heroOv').textContent="Type any title in the search box — you'll get similar movies from the local dataset.";
@@ -432,7 +449,7 @@ function goHome(){
 /* ---------- details + modal ---------- */
 async function getDetail(id){
   if(cache.has(id)) return cache.get(id);
-  const d = await tmdb('/movie/'+id, {append_to_response:'watch/providers'});
+  const d = await tmdb('/movie/'+id, {append_to_response:'watch/providers,videos'});
   cache.set(id,d); return d;
 }
 // swap placeholder art in a card for a real poster once fetched
@@ -483,6 +500,11 @@ function modalHTML(d, region){
       <div class="warn"><a href="https://www.justwatch.com/in/movie/${d.imdb_id||''}" target="_blank" rel="noopener" style="color:var(--accent)">Check availability on JustWatch ↗</a></div>`;
   }
   const gchips = (d.genres||[]).map(g=>`<span class="chip">${esc(g.name)}</span>`).join("");
+  const vids = (d.videos && d.videos.results) || [];
+  const tr = vids.find(v=>v.site==='YouTube'&&v.type==='Trailer')
+          || vids.find(v=>v.site==='YouTube'&&v.type==='Teaser')
+          || vids.find(v=>v.site==='YouTube');
+  const trailerBtn = tr ? `<button class="btn primary" onclick="playTrailer('${tr.key}')">\u25b6 Play trailer</button>` : '';
   const posterInner = d.poster_path ? `<img src="${poster(d.poster_path,342)}" alt="">`
     : `<div class="ph">${esc(d.title)}</div>`;
   return `
@@ -500,6 +522,7 @@ function modalHTML(d, region){
           ${d.runtime?`<span class="chip">${d.runtime} min</span>`:''}
           ${gchips}
         </div>
+        ${trailerBtn}
       </div>
     </div>
     <div class="mstats">
@@ -535,6 +558,78 @@ async function renderSimilar(id){
   }
   if(!items.length){ track.innerHTML=`<div class="empty" style="padding:10px 0">No similar titles found.</div>`; return; }
   track.innerHTML = items.slice(0,12).map(card).join("");
+}
+
+/* ---------- legal streaming: trailers + public-domain films ---------- */
+function playTrailer(key){
+  const back = document.querySelector('.modal .back'); if(!back) return;
+  back.classList.add('playing');
+  back.innerHTML = `<button class="close" onclick="closeModal()">\u2715</button>
+    <div class="player"><iframe src="https://www.youtube.com/embed/${key}?autoplay=1&rel=0"
+      title="Trailer" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>`;
+}
+
+let FREE_LIST = [];
+const FREE_FALLBACK = [
+  {identifier:'his_girl_friday', title:'His Girl Friday', year:1940},
+  {identifier:'house_on_haunted_hill_ipod', title:'House on Haunted Hill', year:1959},
+  {identifier:'JungleBook', title:'Jungle Book', year:1942},
+  {identifier:'reefer_madness1938', title:'Reefer Madness', year:1938},
+  {identifier:'charlie_chaplin_film_fest', title:'Charlie Chaplin Festival', year:1938},
+  {identifier:'VoyagetothePlanetofPrehistoricWomen', title:'Voyage to the Planet of Prehistoric Women', year:1967},
+  {identifier:'HisNewJobCharlesChaplin-1915', title:'His New Job', year:1915},
+  {identifier:'TheFastandtheFuriousJohnIreland1954goofyrip', title:'The Fast and the Furious', year:1955}
+];
+function freeCard(f,i){
+  const ph = `<div class="ph">${esc(f.title)}</div>`;
+  const img = `https://archive.org/services/img/${f.identifier}`;
+  return `<div class="card" onclick="openFreeFilm(${i})">
+    <div class="art">${ph}
+      <img loading="lazy" src="${img}" alt="" onerror="this.remove()">
+      <div class="freebadge">FREE</div>
+      <div class="playbtn"><span>\u25b6</span></div>
+    </div>
+    <h3>${esc(f.title)}</h3><div class="sub">${f.year||'Public domain'}</div>
+  </div>`;
+}
+async function buildFreeRow(){
+  const holder = document.getElementById('freeholder'); if(!holder) return;
+  let films = [];
+  try{
+    const q = 'collection:"feature_films" AND mediatype:"movies"';
+    const u = 'https://archive.org/advancedsearch.php?q=' + encodeURIComponent(q) +
+      '&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year&fl%5B%5D=downloads' +
+      '&sort%5B%5D=downloads+desc&rows=24&page=1&output=json';
+    const r = await fetch(u); const d = await r.json();
+    films = ((d.response && d.response.docs) || []).filter(x=>x.identifier && x.title);
+  }catch(e){ films = []; }
+  if(!films.length) films = FREE_FALLBACK;
+  FREE_LIST = films;
+  holder.innerHTML = `<section class="row" id="free">
+    <div class="rowhead"><h2>Free to Watch</h2>
+      <span>Public-domain films \u2014 streamed legally from the Internet Archive</span></div>
+    <button class="navbtn l" onclick="scrollRow('free',-1)">\u2039</button>
+    <button class="navbtn r" onclick="scrollRow('free',1)">\u203a</button>
+    <div class="track">${films.map(freeCard).join("")}</div>
+  </section>`;
+}
+function openFreeFilm(i){
+  const f = FREE_LIST[i]; if(!f) return;
+  const ov = document.getElementById('overlay'), mo = document.getElementById('modal');
+  ov.classList.add('on'); document.body.style.overflow='hidden';
+  mo.innerHTML = `
+    <div class="back playing" style="background:none">
+      <button class="close" onclick="closeModal()">\u2715</button>
+      <div class="player"><iframe src="https://archive.org/embed/${encodeURIComponent(f.identifier)}"
+        title="${esc(f.title)}" allowfullscreen></iframe></div>
+    </div>
+    <div class="body" style="margin-top:0;padding-top:22px">
+      <h2>${esc(f.title)}</h2>
+      <div class="chips"><span class="chip">Public domain</span>${f.year?`<span class="chip">${f.year}</span>`:''}</div>
+      <p class="note">This film is in the public domain and is streamed from the Internet Archive, which hosts it
+        legally. <a href="https://archive.org/details/${encodeURIComponent(f.identifier)}"
+        target="_blank" rel="noopener" style="color:var(--accent)">View on archive.org \u2197</a></p>
+    </div>`;
 }
 
 /* ---------- region selector ---------- */
